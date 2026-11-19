@@ -4,11 +4,12 @@ import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import AppNav from "@/components/AppNav";
 import { getStudentId } from "@/lib/profile";
+import MarkdownMessage from "@/components/MarkdownMessage";
 
 interface Msg {
   role: "user" | "assistant";
   content: string;
-  source?: "claude" | "demo" | null;
+  source?: "groq" | "claude" | "demo" | null;
 }
 
 const SESSION_KEY = "pathfinder_session_id";
@@ -22,7 +23,7 @@ const suggestions = [
 export default function Mentor() {
   const [studentId, setStudentId] = useState<string | null>(null);
   const [ready, setReady] = useState(false);
-  const [mode, setMode] = useState<"claude" | "demo" | null>(null);
+  const [mode, setMode] = useState<"groq" | "claude" | "demo" | null>(null);
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [msgs, setMsgs] = useState<Msg[]>([]);
   const [input, setInput] = useState("");
@@ -31,21 +32,41 @@ export default function Mentor() {
   const bottom = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
+    let cancelled = false;
     const id = getStudentId();
     const sid = localStorage.getItem(SESSION_KEY);
     setStudentId(id);
     setSessionId(sid);
-    fetch("/api/mentor").then((r) => r.json()).then((d) => setMode(d.mode)).catch(() => {});
-    if (id && sid) {
-      fetch(`/api/students/${id}/conversations?session_id=${sid}`)
-        .then((r) => r.json())
-        .then((d) => setMsgs(d.messages ?? []))
-        .catch(() => {})
-        .finally(() => setReady(true));
-    } else setReady(true);
+
+    async function init() {
+      try {
+        const r = await fetch("/api/mentor");
+        const d = await r.json();
+        if (!cancelled) setMode(d.mode);
+      } catch {
+        // mode stays null — UI handles gracefully
+      }
+
+      if (id && sid) {
+        try {
+          const r = await fetch(`/api/students/${id}/conversations?session_id=${sid}`);
+          const d = await r.json();
+          if (!cancelled) setMsgs(d.messages ?? []);
+        } catch {
+          // history unavailable — start fresh
+        } finally {
+          if (!cancelled) setReady(true);
+        }
+      } else {
+        if (!cancelled) setReady(true);
+      }
+    }
+
+    init();
+    return () => { cancelled = true; };
   }, []);
 
-  useEffect(() => bottom.current?.scrollIntoView({ behavior: "smooth" }), [msgs, sending]);
+  useEffect(() => { bottom.current?.scrollIntoView({ behavior: "smooth" }); }, [msgs, sending]);
 
   async function send(text: string) {
     const message = text.trim();
@@ -91,8 +112,18 @@ export default function Mentor() {
             <p className="mt-1 text-slate-600">Ask anything about your career path. Answers use your saved profile.</p>
           </div>
           {mode && (
-            <span className={`rounded-full px-3 py-1 text-xs font-semibold ${mode === "claude" ? "bg-indigo-100 text-indigo-700" : "bg-amber-100 text-amber-800"}`}>
-              {mode === "claude" ? "Powered by Claude" : "Demo mode: pre-written replies, not AI"}
+            <span className={`rounded-full px-3 py-1 text-xs font-semibold ${
+              mode === "groq"
+                ? "bg-green-100 text-green-700"
+                : mode === "claude"
+                ? "bg-indigo-100 text-indigo-700"
+                : "bg-amber-100 text-amber-800"
+            }`}>
+              {mode === "groq"
+                ? "Powered by Groq"
+                : mode === "claude"
+                ? "Powered by Claude"
+                : "Demo mode: pre-written replies, not AI"}
             </span>
           )}
         </div>
@@ -121,8 +152,12 @@ export default function Mentor() {
               )}
               {msgs.map((m, i) => (
                 <div key={i} className={`flex ${m.role === "user" ? "justify-end" : "justify-start"}`}>
-                  <div className={`max-w-[85%] whitespace-pre-wrap rounded-2xl px-4 py-3 text-sm ${m.role === "user" ? "bg-indigo-600 text-white" : "bg-slate-100 text-slate-800"}`}>
-                    {m.content}
+                  <div className={`max-w-[85%] rounded-2xl px-4 py-3 text-sm ${m.role === "user" ? "bg-indigo-600 text-white" : "bg-slate-100 text-slate-800"}`}>
+                    {m.role === "user" ? (
+                      <p className="whitespace-pre-wrap">{m.content}</p>
+                    ) : (
+                      <MarkdownMessage content={m.content} />
+                    )}
                     {m.role === "assistant" && m.source === "demo" && (
                       <p className="mt-2 text-xs font-semibold text-amber-700">Demo reply</p>
                     )}
